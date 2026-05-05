@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::query::{ParsedQuery, QueryLanguage, QueryParser};
+use crate::query::{ParseQuery, QueryLanguage, QueryParser};
 use crate::utils::normalization::{add_space_between_ascii_and_non_ascii, is_weak_word};
 use crate::{Error, Result};
 use zhconv::{Variant, zhconv};
@@ -24,7 +24,7 @@ struct WeightedTerm {
 }
 
 impl QueryParser for DefaultQueryParser {
-    fn parse(&self, query: &str) -> Result<ParsedQuery> {
+    fn parse(&self, query: &str) -> Result<ParseQuery> {
         if query.trim().is_empty() {
             return Err(Error::InvalidInput("query cannot be empty".to_owned()));
         }
@@ -45,7 +45,7 @@ impl QueryParser for DefaultQueryParser {
         let text_expression =
             self.build_text_expression(&weighted_terms, &synonym_terms, &fine_grained_terms);
 
-        Ok(ParsedQuery {
+        Ok(ParseQuery {
             original_query: query.to_owned(),
             normalized_query,
             keywords,

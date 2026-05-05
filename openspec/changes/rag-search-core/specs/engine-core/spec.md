@@ -1,10 +1,10 @@
 ## ADDED Requirements
 
 ### Requirement: QueryEngine exposes query search
-The system SHALL define a `QueryEngine` trait that accepts a user query, one required caller-built search request, and optional `page_num` / `page_size`, then returns a `HitPage`.
+The system SHALL define a `QueryEngine` trait that accepts a user query, one required `index_name`, one required caller-built search body, and optional `page_num` / `page_size`, then returns a `HitPage`.
 
 #### Scenario: Simple query
-- **WHEN** caller searches with a query string and a caller-built search request
+- **WHEN** caller searches with a query string, index name, and caller-built search body
 - **THEN** QueryEngine uses default pagination and returns hits
 
 ### Requirement: QueryEngine prepares query keywords
@@ -23,14 +23,14 @@ The default QueryEngine implementation SHALL NOT construct backend-specific text
 
 #### Scenario: Business needs custom filters
 - **WHEN** caller needs knowledge-base, tenant, permission, highlight, or field-weight logic
-- **THEN** caller builds those details into the `SearchRequest` body before calling QueryEngine
+- **THEN** caller builds those details into the body before calling QueryEngine
 
 ### Requirement: QueryEngine coordinates recall
 The system SHALL use `search_hits` as the coordinator for recall execution and score recording.
 
 #### Scenario: Recall request exists
-- **WHEN** caller provides a caller-built search request
-- **THEN** QueryEngine runs the request through Store and records the backend score as `hybrid_score`
+- **WHEN** caller provides an index name and caller-built search body
+- **THEN** QueryEngine runs them through Store and records the backend score as `hybrid_score`
 
 ### Requirement: QueryEngine reranks and paginates results
 The system SHALL rerank hits using external reranker when available or configurable local query scoring otherwise, then filter by score and paginate.

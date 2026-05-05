@@ -7,7 +7,7 @@ The project is being rebuilt as a Rust 1.95 RAG search library with clear bounda
 - Create a Rust 2024 workspace/library for RAG search.
 - Introduce base traits for `Store`, `IndexBuilder`, and `QueryEngine` so concrete backends and strategies can be swapped cleanly.
 - Provide an Elasticsearch-backed `Store` implementation as the first backend.
-- Define default document/chunk models, plus generic store items, search requests, hits, scores, and responses.
+- Define default document/chunk models, plus generic store items, hits, scores, and responses.
 - Implement the query-side pipeline around query preparation, caller-built recall, rerank hooks, filtering, pagination, and response assembly.
 - Implement the index-building pipeline around extract, parse, chunk, tokenize, embed, and Store writes.
 - Use Rust 1.95 / Rust 2024 style, including modern async callback patterns where useful, while keeping stable components as traits.

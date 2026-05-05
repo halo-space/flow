@@ -6,7 +6,7 @@ use elasticsearch::{
 };
 use serde_json::{Value, json};
 
-use crate::store::{Item, SearchHit, SearchRequest, Store};
+use crate::store::{Item, SearchHit, Store};
 use crate::{BoxFuture, Error, Result};
 
 #[derive(Debug, Clone)]
@@ -153,12 +153,16 @@ impl Store for Elastic {
         })
     }
 
-    fn search(&self, request: SearchRequest) -> BoxFuture<'_, Result<Vec<SearchHit>>> {
+    fn search<'a>(
+        &'a self,
+        index_name: &'a str,
+        body: Value,
+    ) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
         Box::pin(async move {
             let response = self
                 .client
-                .search(SearchParts::Index(&[&request.index_name]))
-                .body(request.body)
+                .search(SearchParts::Index(&[index_name]))
+                .body(body)
                 .send()
                 .await?;
             let status = response.status_code();

@@ -336,7 +336,7 @@ QueryEngine 不构造业务查询 DSL；ES query_string / multi_match / knn / bo
 
 ```rust
 pub trait Store: Send + Sync {
-    fn search(&self, request: SearchRequest) -> BoxFuture<'_, Result<Vec<SearchHit>>>;
+    fn search<'a>(&'a self, index_name: &'a str, body: Value) -> BoxFuture<'a, Result<Vec<SearchHit>>>;
 }
 ```
 
@@ -372,7 +372,7 @@ HashMap<String, serde_json::Value>
 
 ```rust
 engine
-    .search(query, request, Some(page_num), Some(page_size))
+    .search(query, "chunks", body, Some(page_num), Some(page_size))
     .await?;
 ```
 
@@ -381,7 +381,7 @@ engine
 ```text
 分页参数直接用 page_num / page_size，不为两个字段单独造 Params。
 tenant / user / knowledge_base / doc / tags / highlight 等业务条件不要塞进 QueryEngine 参数。
-业务查询条件、字段权重、高亮、权限过滤直接体现在调用方构造的 SearchRequest body 里。
+业务查询条件、字段权重、高亮、权限过滤直接体现在调用方构造的 body 里。
 默认值在使用处或 Default 实现里定义。
 ```
 
@@ -537,7 +537,6 @@ where
 index::DefaultDocument
 index::DefaultChunk
 Hit
-SearchRequest
 HitPage
 Scores
 ```
@@ -688,13 +687,13 @@ QueryEngine / IndexBuilder 不能直接依赖 elasticsearch-rs。
 推荐：
 
 ```rust
-let hits = self.store.search(request).await?;
+let hits = self.store.search(index_name, body).await?;
 ```
 
 不要：
 
 ```rust
-let hits = self.store.search(request).await.unwrap();
+let hits = self.store.search(index_name, body).await.unwrap();
 ```
 
 ### 7.2 小函数

@@ -5,7 +5,7 @@ pub mod chunker;
 pub mod parser;
 pub mod types;
 
-pub use builder::{DefaultIndexBuilder, IndexBuilderConfig};
+pub use builder::DefaultIndexBuilder;
 pub use types::{
     BuildInput, BuildOutput, ChunkerKind, ContentFormat, DefaultChunk, DefaultDocument,
     ExtractedDocument, KeywordExtractionInput, ParsedContent, Piece, Positions,

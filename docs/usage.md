@@ -64,12 +64,11 @@ use rag::{
     Elastic,
     QueryEngine,
     IndexBuilder,
-    IndexBuilderConfig,
     Store,
 };
 
 use rag::index::{BuildInput, ChunkerKind, ContentFormat};
-use rag::store::{Item, SearchRequest};
+use rag::store::Item;
 ```
 
 默认模型在 `index` 模块下：
@@ -128,25 +127,6 @@ use serde_json::json;
 
 store
     .create_schema(
-        "documents",
-        json!({
-            "mappings": {
-                "properties": {
-                    "id": { "type": "keyword" },
-                    "title": { "type": "text" },
-                    "content": { "type": "text" },
-                    "hash_id": { "type": "keyword" },
-                    "created_at": { "type": "date" },
-                    "metadata": { "type": "object", "enabled": true },
-                    "type": { "type": "keyword" }
-                }
-            }
-        }),
-    )
-    .await?;
-
-store
-    .create_schema(
         "chunks",
         json!({
             "mappings": {
@@ -170,9 +150,9 @@ store
     .await?;
 ```
 
-生产项目里，mapping 应该由业务侧维护，不要写死在 Store。
+生产项目里，mapping 应该由业务侧维护，不要写死在 Store。document 原文和文件元信息如果需要入库，也应由业务侧选择独立索引或其他存储，不放进默认 `IndexBuilder` 入库参数。
 
-## 6. 构建并写入文档
+## 6. 构建并写入 Chunks
 
 `DefaultIndexBuilder` 默认支持：
 
@@ -210,22 +190,25 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use rag::{DefaultIndexBuilder, IndexBuilder, IndexBuilderConfig};
+use rag::{DefaultIndexBuilder, IndexBuilder};
 use rag::index::{BuildInput, ChunkerKind, ContentFormat};
 
-let builder = DefaultIndexBuilder::new(
-    Some(store.clone()),
-    None,
-    IndexBuilderConfig {
-        documents_index: "documents".to_owned(),
-        chunks_index: "chunks".to_owned(),
-        chunker: ChunkerKind::Fixed,
-        chunk_size: 800,
-        chunk_overlap: 100,
-        delimiter: None,
-        keyword_top: 3,
-    },
-);
+let builder = DefaultIndexBuilder::new(Some(store.clone()), None, "chunks")
+    .with_chunking(ChunkerKind::Fixed, 800, 100, None)
+    .with_keyword_top(3);
+
+字段边界：
+
+```text
+index_name:
+  必填。用于写入 chunk 检索单元；正常查询时 QueryEngine.search() 的 index_name 通常也指向这个 index。
+
+document:
+  DefaultIndexBuilder.build() / index() 仍会返回 document 输出对象，方便业务侧自行存储原文和元信息。
+
+QueryEngine:
+  不读取 DefaultIndexBuilder 的入库参数，也不关心 document 原文存在哪里。
+```
 
 let output = builder
     .index(BuildInput {
@@ -301,7 +284,10 @@ QueryEngine 只读取 Store 返回的 source。
 query:
   用户原始输入。
 
-request:
+index_name:
+  必传。调用方要检索的后端索引名，通常是 chunks index。
+
+body:
   必传。调用方构造好的检索条件，里面可以是 text / vector / hybrid 之一。
 
 page_num / page_size:
@@ -381,7 +367,7 @@ keywords:
 
 全文检索表达式:
   QueryParser 生成的文本检索表达式。DefaultQueryEngine 不会自动把它塞进 Store 请求；
-  调用方可以按后端语法把它转换到 SearchRequest.body。
+  调用方可以按后端语法把它转换到后端查询 body。
 
 可控分词扩展:
   默认不过度细分，只在长词、中文词或需要召回扩展时再细分。
@@ -393,43 +379,39 @@ keywords:
 use std::sync::Arc;
 
 use rag::{DefaultQueryEngine, QueryEngine};
-use rag::store::SearchRequest;
 use serde_json::json;
 
 let engine = DefaultQueryEngine::new(store.clone(), None);
 
-let request = SearchRequest {
-    index_name: "chunks".to_owned(),
-    body: json!({
-        "size": 1024,
-        "query": {
-            "bool": {
-                "must": [{
-                    "query_string": {
-                        "query": "重置^3 密码^2",
-                        "fields": [
-                            "questions^8",
-                            "keywords^6",
-                            "title^4",
-                            "content^1",
-                            "question_tokens^3",
-                            "keyword_tokens^3",
-                            "title_tokens^2",
-                            "content_tokens^1"
-                        ],
-                        "default_operator": "OR"
-                    }
-                }],
-                "filter": [
-                    { "term": { "knowledge_base_id": "kb_1" } }
-                ]
-            }
+let body = json!({
+    "size": 1024,
+    "query": {
+        "bool": {
+            "must": [{
+                "query_string": {
+                    "query": "重置^3 密码^2",
+                    "fields": [
+                        "questions^8",
+                        "keywords^6",
+                        "title^4",
+                        "content^1",
+                        "question_tokens^3",
+                        "keyword_tokens^3",
+                        "title_tokens^2",
+                        "content_tokens^1"
+                    ],
+                    "default_operator": "OR"
+                }
+            }],
+            "filter": [
+                { "term": { "knowledge_base_id": "kb_1" } }
+            ]
         }
-    }),
-};
+    }
+});
 
 let page = engine
-    .search("怎么重置密码", request, Some(1), Some(10))
+    .search("怎么重置密码", "chunks", body, Some(1), Some(10))
     .await?;
 ```
 
@@ -466,8 +448,8 @@ hit.scores:
 ```text
 如果希望 query 处理链路影响后端召回：
   先调用 DefaultQueryParser.parse(raw_query)
-  再用 parsed.normalized_query 或 parsed.text_expression 构造 SearchRequest.body
-  最后把 raw_query 和 SearchRequest 一起传给 QueryEngine.search()
+  再用 parsed.normalized_query 或 parsed.text_expression 构造后端查询 body
+  最后把 raw_query、index_name 和 body 一起传给 QueryEngine.search()
 
 raw_query:
   用于日志、追踪、rerank 原始语义。
@@ -527,13 +509,8 @@ let body = json!({
     },
 });
 
-let request = SearchRequest {
-    index_name: "chunks".to_owned(),
-    body,
-};
-
 let response = engine
-    .search(raw_query, request, Some(1), Some(10))
+    .search(raw_query, "chunks", body, Some(1), Some(10))
     .await?;
 ```
 
@@ -643,16 +620,11 @@ let body = json!({
 });
 ```
 
-### 9.4 组装 SearchRequest
+### 9.4 调用 QueryEngine
 
 ```rust
-let request = SearchRequest {
-    index_name: "chunks".to_owned(),
-    body,
-};
-
 let response = engine
-    .search("怎么重置密码", request, Some(1), Some(10))
+    .search("怎么重置密码", "chunks", body, Some(1), Some(10))
     .await?;
 ```
 
@@ -660,7 +632,7 @@ let response = engine
 
 ```text
 1. 按 Query 处理链路生成 keywords 和全文检索表达式。
-2. 把调用方传入的 SearchRequest 直接发给 Store。
+2. 把调用方传入的 index_name 和 body 直接发给 Store。
 3. 如果配置了外部 reranker，用外部 reranker 二阶段排序。
 4. 如果没有外部 reranker，用默认本地 scorer 做 token + vector 二阶段 rerank。
 5. 按 score_threshold 过滤。
@@ -686,7 +658,7 @@ token_similarity:
   命中的 query token/phrase 权重 / query token/phrase 总权重。
 
 vector_similarity:
-  如果 SearchRequest.body 里有 knn.query_vector，并且 hit.source 里有 embedding 或 q_{dim}_vec，
+  如果调用方传入的 body 里有 knn.query_vector，并且 hit.source 里有 embedding 或 q_{dim}_vec，
   本地 rerank 会计算 query vector 与 chunk vector 的 cosine similarity。
 
 最终 score:
@@ -813,8 +785,9 @@ let builder = DefaultIndexBuilder::with_keyword_extractor(
     Some(store.clone()),
     Some(keyword_extractor),
     Some(embedder),
-    IndexBuilderConfig::default(),
-);
+    "chunks",
+)
+.with_keyword_top(3);
 ```
 
 这个设计对应 RAGFlow 的 `auto_keywords` 思路：关键词是 chunk 构建阶段提前生成并写入索引字段，不是用户 query 临时生成。区别是这里不把 LLM 绑死在 builder 里，具体抽取器由调用方实现。
@@ -837,7 +810,7 @@ pub trait Embedder: Send + Sync + std::fmt::Debug {
 let builder = DefaultIndexBuilder::new(
     Some(store.clone()),
     Some(embedder),
-    IndexBuilderConfig::default(),
+    "chunks",
 );
 ```
 
@@ -878,9 +851,9 @@ let engine = DefaultQueryEngine::new(store.clone(), Some(reranker));
 
 ```text
 1. 启动 ES。
-2. 用业务 mapping 创建 documents / chunks index。
-3. 用 DefaultIndexBuilder 写入一篇文本。
-4. 调用方按业务需要构造 ES SearchRequest，例如 query_string / knn。
+2. 用业务 mapping 创建 chunks index。
+3. 用 DefaultIndexBuilder 写入 chunk 检索数据。
+4. 调用方按业务需要构造 ES 查询 body，例如 query_string / knn。
 5. 用 DefaultQueryEngine.search() 返回 hits。
 ```
 
@@ -909,7 +882,7 @@ let engine = DefaultQueryEngine::new(store.clone(), Some(reranker));
 
 ```text
 实现 Store trait。
-保持 search() 接收调用方构造的 request body。
+保持 search() 接收调用方构造的 index_name 和 body。
 不要在后端实现里写死业务字段。
 ```
 
@@ -924,7 +897,7 @@ let engine = DefaultQueryEngine::new(store.clone(), Some(reranker));
 
 ```text
 实现 QueryEngine trait。
-或者复用 DefaultQueryEngine，再传入不同 Store / Reranker / SearchRequest。
+或者复用 DefaultQueryEngine，再传入不同 Store / Reranker / 查询 body。
 ```
 
 ## 15. 本地资料 Demo

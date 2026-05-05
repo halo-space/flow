@@ -6,10 +6,9 @@ use std::sync::Arc;
 
 use rag::index::{BuildInput, ChunkerKind, ContentFormat};
 use rag::query::{DefaultQueryParser, QueryEngine, QueryParser};
-use rag::store::SearchRequest;
 use rag::{
     BoxFuture, DefaultIndexBuilder, DefaultQueryEngine, Elastic, Embedder, Error, IndexBuilder,
-    IndexBuilderConfig, Result, Store,
+    Result, Store,
 };
 use serde_json::{Value, json};
 
@@ -17,7 +16,6 @@ pub const DEFAULT_DATA_DIR: &str = "examples/data";
 pub const ES_URL: &str = "http://127.0.0.1:9200";
 pub const DEMO_QUERY: &str = "怎么重置密码？";
 pub const DEMO_KNOWLEDGE_BASE_ID: &str = "demo_knowledge_base";
-pub const DOCUMENTS_INDEX: &str = "rag_demo_documents";
 pub const CHUNKS_INDEX: &str = "rag_demo_chunks";
 pub const EMBEDDING_DIM: usize = 1024;
 
@@ -76,19 +74,9 @@ pub fn create_index_builder(
     store: Arc<dyn Store>,
     embedder: Arc<dyn Embedder>,
 ) -> DefaultIndexBuilder {
-    DefaultIndexBuilder::new(
-        Some(store),
-        Some(embedder),
-        IndexBuilderConfig {
-            documents_index: DOCUMENTS_INDEX.to_owned(),
-            chunks_index: CHUNKS_INDEX.to_owned(),
-            chunker: ChunkerKind::Fixed,
-            chunk_size: 350,
-            chunk_overlap: 80,
-            delimiter: None,
-            keyword_top: 3,
-        },
-    )
+    DefaultIndexBuilder::new(Some(store), Some(embedder), CHUNKS_INDEX)
+        .with_chunking(ChunkerKind::Fixed, 350, 80, None)
+        .with_keyword_top(3)
 }
 
 pub fn create_engine(store: Arc<dyn Store>) -> DefaultQueryEngine {
@@ -189,29 +177,6 @@ pub fn search_body(text_expression: &str, query_vector: Vec<f32>) -> Value {
     hybrid_search_body(text_expression, query_vector)
 }
 
-pub fn search_request(text_expression: &str, query_vector: Vec<f32>) -> SearchRequest {
-    SearchRequest {
-        index_name: CHUNKS_INDEX.to_owned(),
-        body: search_body(text_expression, query_vector),
-    }
-}
-
-pub fn document_schema() -> Value {
-    json!({
-        "mappings": {
-            "properties": {
-                "id": { "type": "keyword" },
-                "knowledge_base_id": { "type": "keyword" },
-                "title": { "type": "text" },
-                "content": { "type": "text" },
-                "created_at": { "type": "date" },
-                "metadata": { "type": "object", "enabled": true },
-                "type": { "type": "keyword" }
-            }
-        }
-    })
-}
-
 pub fn chunk_schema() -> Value {
     json!({
         "mappings": {
@@ -241,12 +206,8 @@ pub fn chunk_schema() -> Value {
 
 pub async fn recreate_indexes(store: &dyn Store) -> Result<()> {
     let delete_all = json!({ "query": { "match_all": {} } });
-    let _ = store.delete(DOCUMENTS_INDEX, delete_all.clone()).await;
     let _ = store.delete(CHUNKS_INDEX, delete_all).await;
 
-    let _ = store
-        .create_schema(DOCUMENTS_INDEX, document_schema())
-        .await;
     let _ = store.create_schema(CHUNKS_INDEX, chunk_schema()).await;
     Ok(())
 }
@@ -305,19 +266,21 @@ pub async fn run_search() -> Result<()> {
     let embedder = create_embedder();
     let engine = create_engine(store);
     let query = DEMO_QUERY.to_owned();
-    let parsed_query = DefaultQueryParser.parse(&query)?;
-    let query_vector = embedder.embed(&parsed_query.normalized_query).await?;
-    let request = search_request(&parsed_query.text_expression, query_vector);
-    let request_body = serde_json::to_string_pretty(&redacted_search_body(&request.body))?;
-    println!("\nsearch index: {}", request.index_name);
-    println!("search body:\n{request_body}");
+    let parse_query = DefaultQueryParser.parse(&query)?;
+    let query_vector = embedder.embed(&parse_query.normalized_query).await?;
+    let body = search_body(&parse_query.text_expression, query_vector);
+    let redacted_body = serde_json::to_string_pretty(&redacted_search_body(&body))?;
+    println!("\nsearch index: {CHUNKS_INDEX}");
+    println!("search body:\n{redacted_body}");
 
-    let page = engine.search(&query, request, Some(1), Some(5)).await?;
+    let page = engine
+        .search(&query, CHUNKS_INDEX, body, Some(1), Some(5))
+        .await?;
 
     println!("\nquery: {query}");
-    println!("normalized query: {}", parsed_query.normalized_query);
-    println!("text expression: {}", parsed_query.text_expression);
-    println!("keywords: {:?}", parsed_query.keywords);
+    println!("normalized query: {}", parse_query.normalized_query);
+    println!("text expression: {}", parse_query.text_expression);
+    println!("keywords: {:?}", parse_query.keywords);
     println!("total hits after ranking: {}", page.total);
     for (index, hit) in page.hits.iter().enumerate() {
         let title = hit

@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use crate::query::{
-    DefaultQueryParser, Hit, HitPage, LocalScorer, ParsedQuery, QueryEngine, QueryParser,
+    DefaultQueryParser, Hit, HitPage, LocalScorer, ParseQuery, QueryEngine, QueryParser,
     QueryScorer, Reranker,
 };
-use crate::store::{SearchRequest, Store};
+use serde_json::Value;
+
+use crate::store::Store;
 use crate::utils::hit::search_hit_to_hit;
 use crate::{BoxFuture, Error, Result};
 
@@ -115,14 +117,14 @@ impl DefaultQueryEngine {
         }
     }
 
-    fn parse_query(&self, query: &str) -> Result<ParsedQuery> {
+    fn parse_query(&self, query: &str) -> Result<ParseQuery> {
         self.query_parser.parse(query)
     }
 
-    async fn search_hits(&self, request: SearchRequest) -> Result<Vec<Hit>> {
+    async fn search_hits(&self, index_name: &str, body: Value) -> Result<Vec<Hit>> {
         let mut hits = self
             .store
-            .search(request)
+            .search(index_name, body)
             .await?
             .into_iter()
             .map(|hit| search_hit_to_hit(hit, ""))
@@ -138,13 +140,13 @@ impl DefaultQueryEngine {
 
     async fn rerank(
         &self,
-        parsed_query: &ParsedQuery,
+        parse_query: &ParseQuery,
         query_vector: Option<Vec<f32>>,
         mut hits: Vec<Hit>,
     ) -> Result<Vec<Hit>> {
         match self.reranker.as_ref() {
             Some(reranker) => {
-                let model_scores = reranker.rerank(&parsed_query.original_query, &hits).await?;
+                let model_scores = reranker.rerank(&parse_query.original_query, &hits).await?;
                 if model_scores.len() != hits.len() {
                     return Err(Error::External(format!(
                         "reranker returned {} scores for {} hits",
@@ -154,7 +156,7 @@ impl DefaultQueryEngine {
                 }
 
                 for (hit, model_score) in hits.iter_mut().zip(model_scores) {
-                    let term_score = self.scorer.term_score(&parsed_query.keywords, hit);
+                    let term_score = self.scorer.term_score(&parse_query.keywords, hit);
                     let rerank_score = term_score * (1.0 - self.hybrid_score_weight)
                         + model_score * self.hybrid_score_weight;
                     hit.scores.insert("term_score".to_owned(), term_score);
@@ -165,7 +167,7 @@ impl DefaultQueryEngine {
             }
             None => {
                 for hit in &mut hits {
-                    let term_score = self.scorer.term_score(&parsed_query.keywords, hit);
+                    let term_score = self.scorer.term_score(&parse_query.keywords, hit);
                     let vector_score = query_vector
                         .as_deref()
                         .and_then(|vector| self.scorer.vector_score(vector, hit));
@@ -209,7 +211,8 @@ impl QueryEngine for DefaultQueryEngine {
     fn search<'a>(
         &'a self,
         query: &'a str,
-        request: SearchRequest,
+        index_name: &'a str,
+        body: Value,
         page_num: Option<usize>,
         page_size: Option<usize>,
     ) -> BoxFuture<'a, Result<HitPage>> {
@@ -218,10 +221,10 @@ impl QueryEngine for DefaultQueryEngine {
             let page_size = page_size.unwrap_or(10).max(1);
 
             tracing::info!(query = %query, "search.start");
-            let parsed_query = self.parse_query(query)?;
-            let query_vector = self.scorer.query_vector(&request.body);
-            let hits = self.search_hits(request).await?;
-            let ranked_hits = self.rerank(&parsed_query, query_vector, hits).await?;
+            let parse_query = self.parse_query(query)?;
+            let query_vector = self.scorer.query_vector(&body);
+            let hits = self.search_hits(index_name, body).await?;
+            let ranked_hits = self.rerank(&parse_query, query_vector, hits).await?;
             let filtered_hits = self.filter_hits(ranked_hits);
             let page_hits = self.paginate_hits(&filtered_hits, page_num, page_size);
 
@@ -244,7 +247,7 @@ mod tests {
 
     use crate::index::{DefaultChunk, Positions};
     use crate::query::{Hit, QueryEngine, Reranker};
-    use crate::store::{Item, SearchHit, SearchRequest, Store};
+    use crate::store::{Item, SearchHit, Store};
     use crate::{BoxFuture, Result};
 
     use super::{
@@ -255,13 +258,15 @@ mod tests {
     async fn query_engine_search_uses_mock_store() {
         let engine =
             DefaultQueryEngine::with_search_settings(Arc::new(MockStore), None, 1024, 0.0, 0.0);
-        let request = SearchRequest {
-            index_name: "chunks".to_owned(),
-            body: search_body("怎么重置密码", &[]),
-        };
 
         let page = engine
-            .search("怎么重置密码", request, None, None)
+            .search(
+                "怎么重置密码",
+                "chunks",
+                search_body("怎么重置密码", &[]),
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(page.total, 1);
@@ -285,33 +290,26 @@ mod tests {
             "怎么重置密码",
             &[json!({ "terms": { "knowledge_base_id": ["kb_1"] } })],
         );
-        let request = SearchRequest {
-            index_name: "custom_chunks".to_owned(),
-            body: body.clone(),
-        };
-
         let _ = engine
-            .search("怎么重置密码", request, None, None)
+            .search("怎么重置密码", "custom_chunks", body.clone(), None, None)
             .await
             .unwrap();
 
         let recorded = store.recorded.lock().unwrap();
         assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].index_name, "custom_chunks");
-        assert_eq!(recorded[0].body, body);
+        assert_eq!(recorded[0].0, "custom_chunks");
+        assert_eq!(recorded[0].1, body);
     }
 
     #[tokio::test]
-    async fn query_engine_treats_search_request_as_single_backend_condition() {
+    async fn query_engine_treats_body_as_single_backend_condition() {
         let engine =
             DefaultQueryEngine::with_search_settings(Arc::new(RouteStore), None, 1024, 0.0, 0.95);
         let page = engine
             .search(
                 "怎么重置密码",
-                SearchRequest {
-                    index_name: "chunks".to_owned(),
-                    body: json!({ "mode": "hybrid" }),
-                },
+                "chunks",
+                json!({ "mode": "hybrid" }),
                 None,
                 None,
             )
@@ -329,17 +327,15 @@ mod tests {
         let page = engine
             .search(
                 "怎么重置密码",
-                SearchRequest {
-                    index_name: "chunks".to_owned(),
-                    body: json!({
-                        "query": { "match_all": {} },
-                        "knn": {
-                            "field": "embedding",
-                            "query_vector": [1.0, 0.0],
-                            "k": 2
-                        }
-                    }),
-                },
+                "chunks",
+                json!({
+                    "query": { "match_all": {} },
+                    "knn": {
+                        "field": "embedding",
+                        "query_vector": [1.0, 0.0],
+                        "k": 2
+                    }
+                }),
                 None,
                 Some(2),
             )
@@ -358,10 +354,8 @@ mod tests {
         let page = engine
             .search(
                 "怎么重置密码",
-                SearchRequest {
-                    index_name: "chunks".to_owned(),
-                    body: search_body("怎么重置密码", &[]),
-                },
+                "chunks",
+                search_body("怎么重置密码", &[]),
                 None,
                 Some(1),
             )
@@ -374,13 +368,15 @@ mod tests {
     #[tokio::test]
     async fn query_engine_rejects_wrong_reranker_score_count() {
         let engine = DefaultQueryEngine::new(Arc::new(MockStore), Some(Arc::new(BadReranker)));
-        let request = SearchRequest {
-            index_name: "chunks".to_owned(),
-            body: search_body("怎么重置密码", &[]),
-        };
 
         let error = engine
-            .search("怎么重置密码", request, None, None)
+            .search(
+                "怎么重置密码",
+                "chunks",
+                search_body("怎么重置密码", &[]),
+                None,
+                None,
+            )
             .await
             .unwrap_err();
 
@@ -432,7 +428,11 @@ mod tests {
             Box::pin(async { Ok(None) })
         }
 
-        fn search(&self, _request: SearchRequest) -> BoxFuture<'_, Result<Vec<SearchHit>>> {
+        fn search<'a>(
+            &'a self,
+            _index_name: &'a str,
+            _body: Value,
+        ) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
             Box::pin(async {
                 let mut scores = BTreeMap::new();
                 scores.insert("text".to_owned(), 1.0);
@@ -463,7 +463,7 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct RecordingStore {
-        recorded: Mutex<Vec<SearchRequest>>,
+        recorded: Mutex<Vec<(String, Value)>>,
     }
 
     impl Store for RecordingStore {
@@ -508,8 +508,15 @@ mod tests {
             Box::pin(async { Ok(None) })
         }
 
-        fn search(&self, request: SearchRequest) -> BoxFuture<'_, Result<Vec<SearchHit>>> {
-            self.recorded.lock().unwrap().push(request);
+        fn search<'a>(
+            &'a self,
+            index_name: &'a str,
+            body: Value,
+        ) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
+            self.recorded
+                .lock()
+                .unwrap()
+                .push((index_name.to_owned(), body));
             Box::pin(async { Ok(vec![search_hit(1.0)]) })
         }
     }
@@ -559,9 +566,13 @@ mod tests {
             Box::pin(async { Ok(None) })
         }
 
-        fn search(&self, request: SearchRequest) -> BoxFuture<'_, Result<Vec<SearchHit>>> {
+        fn search<'a>(
+            &'a self,
+            _index_name: &'a str,
+            body: Value,
+        ) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
             Box::pin(async move {
-                let score = match request.body.get("mode").and_then(Value::as_str) {
+                let score = match body.get("mode").and_then(Value::as_str) {
                     Some("hybrid") => 0.9,
                     _ => 0.8,
                 };
@@ -615,7 +626,11 @@ mod tests {
             Box::pin(async { Ok(None) })
         }
 
-        fn search(&self, _request: SearchRequest) -> BoxFuture<'_, Result<Vec<SearchHit>>> {
+        fn search<'a>(
+            &'a self,
+            _index_name: &'a str,
+            _body: Value,
+        ) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
             Box::pin(async {
                 let mut first = default_chunk();
                 first.id = "chunk_1".to_owned();

@@ -11,30 +11,10 @@ use crate::index::{
 use crate::store::{Item, Store};
 use crate::{BoxFuture, Embedder, Error, Result};
 
-#[derive(Debug, Clone)]
-pub struct IndexBuilderConfig {
-    pub documents_index: String,
-    pub chunks_index: String,
-    pub chunker: ChunkerKind,
-    pub chunk_size: usize,
-    pub chunk_overlap: usize,
-    pub delimiter: Option<String>,
-    pub keyword_top: usize,
-}
-
-impl Default for IndexBuilderConfig {
-    fn default() -> Self {
-        Self {
-            documents_index: "documents".to_owned(),
-            chunks_index: "chunks".to_owned(),
-            chunker: ChunkerKind::Fixed,
-            chunk_size: 800,
-            chunk_overlap: 100,
-            delimiter: None,
-            keyword_top: 3,
-        }
-    }
-}
+const DEFAULT_CHUNKER: ChunkerKind = ChunkerKind::Fixed;
+const DEFAULT_CHUNK_SIZE: usize = 800;
+const DEFAULT_CHUNK_OVERLAP: usize = 100;
+const DEFAULT_KEYWORD_TOP: usize = 3;
 
 #[derive(Debug)]
 pub struct DefaultIndexBuilder {
@@ -45,7 +25,12 @@ pub struct DefaultIndexBuilder {
     tokenizer: Arc<dyn Tokenizer>,
     keyword_extractor: Option<Arc<dyn KeywordExtractor>>,
     embedder: Option<Arc<dyn Embedder>>,
-    config: IndexBuilderConfig,
+    index_name: String,
+    chunker_kind: ChunkerKind,
+    chunk_size: usize,
+    chunk_overlap: usize,
+    delimiter: Option<String>,
+    keyword_top: usize,
 }
 
 impl DefaultIndexBuilder {
@@ -53,9 +38,9 @@ impl DefaultIndexBuilder {
     pub fn new(
         store: Option<Arc<dyn Store>>,
         embedder: Option<Arc<dyn Embedder>>,
-        config: IndexBuilderConfig,
+        index_name: impl Into<String>,
     ) -> Self {
-        Self::with_keyword_extractor(store, None, embedder, config)
+        Self::with_keyword_extractor(store, None, embedder, index_name)
     }
 
     #[must_use]
@@ -63,7 +48,7 @@ impl DefaultIndexBuilder {
         store: Option<Arc<dyn Store>>,
         keyword_extractor: Option<Arc<dyn KeywordExtractor>>,
         embedder: Option<Arc<dyn Embedder>>,
-        config: IndexBuilderConfig,
+        index_name: impl Into<String>,
     ) -> Self {
         Self {
             store,
@@ -73,8 +58,34 @@ impl DefaultIndexBuilder {
             tokenizer: Arc::new(SimpleTokenizer),
             keyword_extractor,
             embedder,
-            config,
+            index_name: index_name.into(),
+            chunker_kind: DEFAULT_CHUNKER,
+            chunk_size: DEFAULT_CHUNK_SIZE,
+            chunk_overlap: DEFAULT_CHUNK_OVERLAP,
+            delimiter: None,
+            keyword_top: DEFAULT_KEYWORD_TOP,
         }
+    }
+
+    #[must_use]
+    pub fn with_chunking(
+        mut self,
+        chunker_kind: ChunkerKind,
+        chunk_size: usize,
+        chunk_overlap: usize,
+        delimiter: Option<String>,
+    ) -> Self {
+        self.chunker_kind = chunker_kind;
+        self.chunk_size = chunk_size;
+        self.chunk_overlap = chunk_overlap;
+        self.delimiter = delimiter;
+        self
+    }
+
+    #[must_use]
+    pub fn with_keyword_top(mut self, keyword_top: usize) -> Self {
+        self.keyword_top = keyword_top;
+        self
     }
 
     fn build_document(&self, extracted: &ExtractedDocument, input: &BuildInput) -> DefaultDocument {
@@ -136,7 +147,7 @@ impl DefaultIndexBuilder {
             .extract_keywords(KeywordExtractionInput {
                 title: &chunk.title,
                 content: &chunk.content,
-                top: self.config.keyword_top,
+                top: self.keyword_top,
             })
             .await?
             .into_iter()
@@ -172,13 +183,10 @@ impl IndexBuilder for DefaultIndexBuilder {
             let parsed = self.parser.parse(&extracted, input.format)?;
             let pieces = self.chunker.chunk(
                 parsed,
-                input.chunker.unwrap_or(self.config.chunker),
-                input.chunk_size.unwrap_or(self.config.chunk_size),
-                input.chunk_overlap.unwrap_or(self.config.chunk_overlap),
-                input
-                    .delimiter
-                    .as_deref()
-                    .or(self.config.delimiter.as_deref()),
+                input.chunker.unwrap_or(self.chunker_kind),
+                input.chunk_size.unwrap_or(self.chunk_size),
+                input.chunk_overlap.unwrap_or(self.chunk_overlap),
+                input.delimiter.as_deref().or(self.delimiter.as_deref()),
             )?;
 
             let document = self.build_document(&extracted, &input);
@@ -224,21 +232,9 @@ impl IndexBuilder for DefaultIndexBuilder {
                 .store
                 .as_ref()
                 .ok_or_else(|| Error::InvalidInput("store is required for index()".to_owned()))?;
-            let document_id = output.document.id.clone();
             let chunk_items = output.chunks.clone();
 
-            store
-                .insert(
-                    &self.config.documents_index,
-                    Item {
-                        id: document_id,
-                        source: output.document.source.clone(),
-                    },
-                )
-                .await?;
-            store
-                .batch_insert(&self.config.chunks_index, chunk_items)
-                .await?;
+            store.batch_insert(&self.index_name, chunk_items).await?;
 
             tracing::info!(document_id = %output.document.id, chunk_count = output.chunks.len(), "index.store.done");
             Ok(output)
@@ -325,6 +321,9 @@ impl Tokenizer for SimpleTokenizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use crate::store::SearchHit;
 
     #[test]
     fn tokenizer_keeps_words() {
@@ -353,7 +352,7 @@ mod tests {
             None,
             Some(Arc::new(StaticKeywordExtractor)),
             None,
-            IndexBuilderConfig::default(),
+            "chunks",
         );
 
         let output = builder
@@ -382,6 +381,108 @@ mod tests {
         assert_eq!(
             chunk["keyword_tokens"],
             serde_json::json!(["自动关键词", "提取"])
+        );
+    }
+
+    #[derive(Debug, Default)]
+    struct RecordingStore {
+        batch_insert_indexes: Mutex<Vec<String>>,
+    }
+
+    impl Store for RecordingStore {
+        fn create_schema<'a>(
+            &'a self,
+            _index_name: &'a str,
+            _schema: serde_json::Value,
+        ) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn insert<'a>(&'a self, index_name: &'a str, _item: Item) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                Err(Error::External(format!(
+                    "unexpected document insert into {index_name}"
+                )))
+            })
+        }
+
+        fn batch_insert<'a>(
+            &'a self,
+            index_name: &'a str,
+            _items: Vec<Item>,
+        ) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async move {
+                self.batch_insert_indexes
+                    .lock()
+                    .unwrap()
+                    .push(index_name.to_owned());
+                Ok(())
+            })
+        }
+
+        fn update<'a>(
+            &'a self,
+            _index_name: &'a str,
+            _id: &'a str,
+            _fields: serde_json::Value,
+        ) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn delete<'a>(
+            &'a self,
+            _index_name: &'a str,
+            _query: serde_json::Value,
+        ) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn get<'a>(
+            &'a self,
+            _index_name: &'a str,
+            _id: &'a str,
+        ) -> BoxFuture<'a, Result<Option<serde_json::Value>>> {
+            Box::pin(async { Ok(None) })
+        }
+
+        fn search<'a>(
+            &'a self,
+            _index_name: &'a str,
+            _body: serde_json::Value,
+        ) -> BoxFuture<'a, Result<Vec<SearchHit>>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn index_writes_only_chunks() {
+        let store = Arc::new(RecordingStore::default());
+        let builder = DefaultIndexBuilder::new(Some(store.clone()), None, "chunks_only");
+
+        builder
+            .index(BuildInput {
+                content: "只写 chunk，不写 document。".to_owned(),
+                title: "chunk only".to_owned(),
+                kind: "text".to_owned(),
+                format: ContentFormat::Text,
+                tenant_id: None,
+                user_id: None,
+                knowledge_base_id: None,
+                metadata: serde_json::json!({}),
+                tags: vec![],
+                chunker: None,
+                chunk_size: None,
+                chunk_overlap: None,
+                delimiter: None,
+                keywords: vec![],
+                questions: vec![],
+            })
+            .await
+            .expect("index should succeed");
+
+        assert_eq!(
+            *store.batch_insert_indexes.lock().unwrap(),
+            vec!["chunks_only".to_owned()]
         );
     }
 

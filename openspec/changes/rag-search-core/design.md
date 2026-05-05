@@ -49,9 +49,9 @@ Rationale: document and chunk fields often include product-specific concepts suc
 
 Alternative considered: export `Document` and `Chunk` as canonical models. Rejected because it would make business fields look like framework requirements.
 
-### QueryEngine executes provided recall requests
+### QueryEngine executes provided recall bodies
 
-`QueryEngine::search()` receives the user query, one required caller-built search request, and optional `page_num` / `page_size` values. The default engine does not build Elasticsearch `multi_match`, `knn`, bool filters, tenant filters, knowledge-base filters, or other business DSL in production code.
+`QueryEngine::search()` receives the user query, one required `index_name`, one required caller-built body, and optional `page_num` / `page_size` values. The default engine does not build Elasticsearch `multi_match`, `knn`, bool filters, tenant filters, knowledge-base filters, or other business DSL in production code.
 
 Rationale: `QueryEngine` should own framework-level query flow—query preparation, recall coordination, rerank, threshold filtering, pagination, and response assembly—without pretending to know every product's query shape.
 
@@ -61,17 +61,17 @@ Alternative considered: hardcode Elasticsearch text/vector request builders in `
 
 Query preparation follows a stable pipeline: preserve the original query for tracing, add Chinese/English boundary spacing, normalize case and character width, normalize traditional Chinese to simplified Chinese, remove unsafe search punctuation, remove weak semantic words, choose Chinese or English token handling, compute weighted terms, expand synonyms, use controlled fine-grained token expansion, and produce keywords for rerank/explanation.
 
-Rationale: query preparation affects local rerank and explainability even when the backend request body is caller-built. Keeping this logic in `QueryEngine` gives consistent ranking behavior without forcing `QueryEngine` to own backend DSL construction.
+Rationale: query preparation affects local rerank and explainability even when the backend body is caller-built. Keeping this logic in `QueryEngine` gives consistent ranking behavior without forcing `QueryEngine` to own backend DSL construction.
 
 Alternative considered: let every caller prepare query keywords independently. Rejected because it would make local rerank behavior inconsistent and harder to test.
 
 ### QueryEngine owns recall coordination and ranking
 
-`QueryEngine::search_hits()` coordinates the caller-built recall request and writes recall details to `Hit.scores`.
+`QueryEngine::search_hits()` coordinates the caller-built recall body and writes recall details to `Hit.scores`.
 
 Rationale: this keeps query orchestration in `QueryEngine` while leaving backend DSL and transport details in the caller and `Store`.
 
-Alternative considered: expose multiple stage-specific search entry points. Rejected because a single caller-built request is easier to reason about and keeps the API surface smaller.
+Alternative considered: expose multiple stage-specific search entry points. Rejected because a single caller-built body is easier to reason about and keeps the API surface smaller.
 
 ### Long-lived components use traits; temporary async callbacks use AsyncFn
 

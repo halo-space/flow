@@ -10,7 +10,7 @@ pub mod utils;
 
 pub use crate::embedding::Embedder;
 pub use crate::error::{Error, Result};
-pub use crate::index::{DefaultIndexBuilder, IndexBuilder, IndexBuilderConfig, KeywordExtractor};
+pub use crate::index::{DefaultIndexBuilder, IndexBuilder, KeywordExtractor};
 pub use crate::query::{DefaultQueryEngine, LocalScorer, QueryEngine, QueryScorer};
 pub use crate::store::{Elastic, Store};
 

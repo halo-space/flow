@@ -15,7 +15,7 @@ The system SHALL create Elasticsearch indexes using schema bodies provided by th
 - **THEN** Elastic sends that mapping body to Elasticsearch without adding business fields
 
 ### Requirement: Elastic executes caller-built query bodies
-The system SHALL execute search requests using query bodies provided by the caller.
+The system SHALL execute searches using an index name and query body provided by the caller.
 
 #### Scenario: Execute search body
 - **WHEN** `Store::search` is called with an index name and JSON body

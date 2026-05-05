@@ -29,7 +29,7 @@ pub enum QueryLanguage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ParsedQuery {
+pub struct ParseQuery {
     pub original_query: String,
     pub normalized_query: String,
     pub keywords: Vec<String>,

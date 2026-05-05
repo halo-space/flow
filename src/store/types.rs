@@ -16,9 +16,3 @@ pub struct SearchHit {
     pub scores: BTreeMap<String, f32>,
     pub highlight: Option<String>,
 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SearchRequest {
-    pub index_name: String,
-    pub body: Value,
-}

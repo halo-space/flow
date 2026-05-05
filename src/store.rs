@@ -6,7 +6,7 @@ pub mod elastic;
 pub mod types;
 
 pub use elastic::Elastic;
-pub use types::{Item, SearchHit, SearchRequest};
+pub use types::{Item, SearchHit};
 
 pub trait Store: Send + Sync + std::fmt::Debug {
     fn create_schema<'a>(&'a self, index_name: &'a str, schema: Value)
@@ -31,5 +31,9 @@ pub trait Store: Send + Sync + std::fmt::Debug {
 
     fn get<'a>(&'a self, index_name: &'a str, id: &'a str) -> BoxFuture<'a, Result<Option<Value>>>;
 
-    fn search(&self, request: SearchRequest) -> BoxFuture<'_, Result<Vec<SearchHit>>>;
+    fn search<'a>(
+        &'a self,
+        index_name: &'a str,
+        body: Value,
+    ) -> BoxFuture<'a, Result<Vec<SearchHit>>>;
 }

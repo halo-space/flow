@@ -1,33 +1,39 @@
-use crate::index::{Piece, Positions};
+use crate::Result;
+use crate::index::{ChunkInput, Chunker, Piece, Positions};
 
-pub fn chunk(content: &str, delimiter: &str, chunk_size: usize) -> Vec<Piece> {
-    let delimiter = if delimiter.is_empty() {
-        "\n\n"
-    } else {
-        delimiter
-    };
-    let mut pieces = Vec::new();
-    let mut current = String::new();
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Delimiter;
 
-    for part in content
-        .split(delimiter)
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-    {
-        if !current.is_empty() && current.len() + part.len() > chunk_size {
-            pieces.push(piece(std::mem::take(&mut current), pieces.len()));
+impl Chunker for Delimiter {
+    fn chunk(&self, input: ChunkInput<'_>) -> Result<Vec<Piece>> {
+        let delimiter = match input.delimiter {
+            Some(delimiter) if !delimiter.is_empty() => delimiter,
+            _ => "\n\n",
+        };
+        let mut pieces = Vec::new();
+        let mut current = String::new();
+
+        for part in input
+            .content
+            .split(delimiter)
+            .map(str::trim)
+            .filter(|part| !part.is_empty())
+        {
+            if !current.is_empty() && current.len() + part.len() > input.chunk_size {
+                pieces.push(piece(std::mem::take(&mut current), pieces.len()));
+            }
+            if !current.is_empty() {
+                current.push_str(delimiter);
+            }
+            current.push_str(part);
         }
+
         if !current.is_empty() {
-            current.push_str(delimiter);
+            pieces.push(piece(current, pieces.len()));
         }
-        current.push_str(part);
-    }
 
-    if !current.is_empty() {
-        pieces.push(piece(current, pieces.len()));
+        Ok(pieces)
     }
-
-    pieces
 }
 
 fn piece(content: String, chunk_index: usize) -> Piece {

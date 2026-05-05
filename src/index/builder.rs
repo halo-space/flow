@@ -4,9 +4,10 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::index::{
-    BuildInput, BuildOutput, Chunker, ChunkerKind, ContentFormat, DefaultChunk, DefaultDocument,
-    ExtractedDocument, Extractor, IndexBuilder, KeywordExtractionInput, KeywordExtractor,
-    ParsedContent, Parser, Piece, Tokenizer, chunker, parser,
+    BuildInput, BuildOutput, ChunkPipeline, ChunkPipelineInput, ChunkerKind, DefaultChunk,
+    DefaultDocument, ExtractedDocument, Extractor, IndexBuilder, KeywordExtractionInput,
+    KeywordExtractor, ParseInput, Parser, Piece, Tokenizer, chunker::Pipeline,
+    parser::Pipeline as ParserPipeline,
 };
 use crate::store::{Item, Store};
 use crate::{BoxFuture, Embedder, Error, Result};
@@ -21,7 +22,7 @@ pub struct DefaultIndexBuilder {
     store: Option<Arc<dyn Store>>,
     extractor: Arc<dyn Extractor>,
     parser: Arc<dyn Parser>,
-    chunker: Arc<dyn Chunker>,
+    chunker: Arc<dyn ChunkPipeline>,
     tokenizer: Arc<dyn Tokenizer>,
     keyword_extractor: Option<Arc<dyn KeywordExtractor>>,
     embedder: Option<Arc<dyn Embedder>>,
@@ -53,8 +54,8 @@ impl DefaultIndexBuilder {
         Self {
             store,
             extractor: Arc::new(PlainTextExtractor),
-            parser: Arc::new(DefaultParser),
-            chunker: Arc::new(DefaultChunker),
+            parser: Arc::new(ParserPipeline::default()),
+            chunker: Arc::new(Pipeline::default()),
             tokenizer: Arc::new(SimpleTokenizer),
             keyword_extractor,
             embedder,
@@ -180,14 +181,17 @@ impl IndexBuilder for DefaultIndexBuilder {
             tracing::info!(title = %input.title, kind = %input.kind, "index.build.start");
 
             let extracted = self.extractor.extract(&input).await?;
-            let parsed = self.parser.parse(&extracted, input.format)?;
-            let pieces = self.chunker.chunk(
+            let parsed = self.parser.parse(ParseInput {
+                extracted: &extracted,
+                format: input.format,
+            })?;
+            let pieces = self.chunker.chunk(ChunkPipelineInput {
                 parsed,
-                input.chunker.unwrap_or(self.chunker_kind),
-                input.chunk_size.unwrap_or(self.chunk_size),
-                input.chunk_overlap.unwrap_or(self.chunk_overlap),
-                input.delimiter.as_deref().or(self.delimiter.as_deref()),
-            )?;
+                kind: input.chunker.unwrap_or(self.chunker_kind),
+                chunk_size: input.chunk_size.unwrap_or(self.chunk_size),
+                chunk_overlap: input.chunk_overlap.unwrap_or(self.chunk_overlap),
+                delimiter: input.delimiter.as_deref().or(self.delimiter.as_deref()),
+            })?;
 
             let document = self.build_document(&extracted, &input);
             let mut chunks: Vec<DefaultChunk> = pieces
@@ -259,40 +263,6 @@ impl Extractor for PlainTextExtractor {
 }
 
 #[derive(Debug)]
-pub struct DefaultParser;
-
-impl Parser for DefaultParser {
-    fn parse(&self, extracted: &ExtractedDocument, format: ContentFormat) -> Result<ParsedContent> {
-        match format {
-            ContentFormat::Text => Ok(parser::text::parse(extracted)),
-            ContentFormat::Qa => parser::qa::parse(&extracted.content),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct DefaultChunker;
-
-impl Chunker for DefaultChunker {
-    fn chunk(
-        &self,
-        parsed: ParsedContent,
-        kind: ChunkerKind,
-        chunk_size: usize,
-        chunk_overlap: usize,
-        delimiter: Option<&str>,
-    ) -> Result<Vec<Piece>> {
-        Ok(chunker::default::chunk(
-            parsed,
-            kind,
-            chunk_size,
-            chunk_overlap,
-            delimiter,
-        ))
-    }
-}
-
-#[derive(Debug)]
 pub struct SimpleTokenizer;
 
 impl Tokenizer for SimpleTokenizer {
@@ -323,6 +293,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    use crate::index::{ContentFormat, parser::Qa};
     use crate::store::SearchHit;
 
     #[test]
@@ -488,10 +459,19 @@ mod tests {
 
     #[test]
     fn qa_parser_extracts_pairs() {
-        let parsed = parser::qa::parse(
-            "Q: 如何重置密码？\nA: 点击忘记密码。\n\nQ: 支持什么文件？\nA: txt。",
-        )
-        .unwrap();
+        let extracted = ExtractedDocument {
+            title: "QA".to_owned(),
+            content: "Q: 如何重置密码？\nA: 点击忘记密码。\n\nQ: 支持什么文件？\nA: txt。"
+                .to_owned(),
+            kind: "qa".to_owned(),
+            size: 0,
+        };
+        let parsed = Qa
+            .parse(ParseInput {
+                extracted: &extracted,
+                format: ContentFormat::Qa,
+            })
+            .unwrap();
         assert_eq!(parsed.pieces.len(), 2);
         assert_eq!(parsed.pieces[0].questions[0], "如何重置密码？");
     }

@@ -75,7 +75,7 @@ Alternative considered: expose multiple stage-specific search entry points. Reje
 
 ### Long-lived components use traits; temporary async callbacks use AsyncFn
 
-`Store`, `Embedder`, `Reranker`, `Tokenizer`, `Extractor`, `Parser`, and `Chunker` are traits. Utility operations such as retry hooks may use `AsyncFn` / `AsyncFnMut` when useful.
+`Store`, `Embedder`, `Reranker`, `Tokenizer`, `Extractor`, `Parser`, `Chunker`, and `ChunkPipeline` are traits. Utility operations such as retry hooks may use `AsyncFn` / `AsyncFnMut` when useful.
 
 Rationale: traits make dependency injection and testing simple. AsyncFn avoids unnecessary `Box<dyn Future>` for short-lived callbacks.
 

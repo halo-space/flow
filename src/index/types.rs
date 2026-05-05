@@ -104,11 +104,34 @@ pub struct ParsedContent {
     pub pieces: Vec<Piece>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ParseInput<'a> {
+    pub extracted: &'a ExtractedDocument,
+    pub format: ContentFormat,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Piece {
     pub content: String,
     pub questions: Vec<String>,
     pub positions: Positions,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ChunkInput<'a> {
+    pub content: &'a str,
+    pub chunk_size: usize,
+    pub chunk_overlap: usize,
+    pub delimiter: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChunkPipelineInput<'a> {
+    pub parsed: ParsedContent,
+    pub kind: ChunkerKind,
+    pub chunk_size: usize,
+    pub chunk_overlap: usize,
+    pub delimiter: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

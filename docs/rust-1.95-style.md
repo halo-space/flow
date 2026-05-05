@@ -726,26 +726,29 @@ Parser / Chunker 不放 `utils`，它们属于 IndexBuilder 体系：
 
 ```text
 src/index/parser/text.rs:
-  普通文本格式解析。
+  PlainText，普通文本格式解析对象。
 
 src/index/parser/qa.rs:
-  QA 格式解析。
+  Qa，QA 格式解析对象。
 
-src/index/chunker/default.rs:
-  默认 Chunker 调度入口，只根据 ChunkerKind 分发。
+src/index/chunker/pipeline.rs:
+  Pipeline，负责按 ChunkerKind 分发并统一修正 chunk 顺序。
 
 src/index/chunker/fixed_size.rs:
-  固定大小切分，不做 overlap。
+  Fixed，固定大小切分，不做 overlap。
 
 src/index/chunker/sliding_window.rs:
-  固定窗口 + overlap 滑动切分。
+  SlidingWindow，固定窗口 + overlap 滑动切分。
 
 src/index/chunker/delimiter.rs:
-  按固定分隔符聚合切分。
+  Delimiter，按固定分隔符聚合切分。
 
 src/index/chunker/semantic.rs:
-  语义切分入口；第一版先按段落/换行近似实现，后续可替换为真正语义算法。
+  Semantic，语义切分入口；第一版先按段落/换行近似实现，后续可替换为真正语义算法。
 ```
+
+Parser / Chunker 算法不要写成散落的 `pub fn parse()` / `pub fn chunk()`。
+每种算法优先定义成结构体，并通过 `ParseInput` / `ChunkInput` 接收参数。
 
 ### 7.3 明确所有权
 

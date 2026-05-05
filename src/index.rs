@@ -7,8 +7,9 @@ pub mod types;
 
 pub use builder::DefaultIndexBuilder;
 pub use types::{
-    BuildInput, BuildOutput, ChunkerKind, ContentFormat, DefaultChunk, DefaultDocument,
-    ExtractedDocument, KeywordExtractionInput, ParsedContent, Piece, Positions,
+    BuildInput, BuildOutput, ChunkInput, ChunkPipelineInput, ChunkerKind, ContentFormat,
+    DefaultChunk, DefaultDocument, ExtractedDocument, KeywordExtractionInput, ParseInput,
+    ParsedContent, Piece, Positions,
 };
 
 pub trait IndexBuilder: Send + Sync + std::fmt::Debug {
@@ -33,16 +34,13 @@ pub trait Extractor: Send + Sync + std::fmt::Debug {
 }
 
 pub trait Parser: Send + Sync + std::fmt::Debug {
-    fn parse(&self, extracted: &ExtractedDocument, format: ContentFormat) -> Result<ParsedContent>;
+    fn parse(&self, input: ParseInput<'_>) -> Result<ParsedContent>;
 }
 
 pub trait Chunker: Send + Sync + std::fmt::Debug {
-    fn chunk(
-        &self,
-        parsed: ParsedContent,
-        kind: ChunkerKind,
-        chunk_size: usize,
-        chunk_overlap: usize,
-        delimiter: Option<&str>,
-    ) -> Result<Vec<Piece>>;
+    fn chunk(&self, input: ChunkInput<'_>) -> Result<Vec<Piece>>;
+}
+
+pub trait ChunkPipeline: Send + Sync + std::fmt::Debug {
+    fn chunk(&self, input: ChunkPipelineInput<'_>) -> Result<Vec<Piece>>;
 }

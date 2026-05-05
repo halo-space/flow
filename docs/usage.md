@@ -890,7 +890,8 @@ let engine = DefaultQueryEngine::new(store.clone(), Some(reranker));
 
 ```text
 实现 IndexBuilder trait。
-或者替换 Extractor / Parser / Chunker / Tokenizer / Embedder。
+或者替换 Extractor / Parser / ChunkPipeline / Tokenizer / Embedder。
+新增切分算法时，实现 Chunker trait，再挂到 Pipeline 或自定义 ChunkPipeline。
 ```
 
 如果要扩展查询流程：

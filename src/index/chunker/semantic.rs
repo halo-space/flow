@@ -1,5 +1,15 @@
-use crate::index::{Piece, chunker};
+use crate::Result;
+use crate::index::chunker::Delimiter;
+use crate::index::{ChunkInput, Chunker, Piece};
 
-pub fn chunk(content: &str, chunk_size: usize) -> Vec<Piece> {
-    chunker::delimiter::chunk(content, "\n", chunk_size)
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Semantic;
+
+impl Chunker for Semantic {
+    fn chunk(&self, input: ChunkInput<'_>) -> Result<Vec<Piece>> {
+        Delimiter.chunk(ChunkInput {
+            delimiter: Some("\n"),
+            ..input
+        })
+    }
 }
